@@ -1,0 +1,14 @@
+[package]
+name = "tokio"
+version = "0.1.0"
+authors = ["tekjar <raviteja@bytebeam.io>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+argh = "0.1"
+mqtt4bytes = "0.1.4"
+tokio = { version = "=0.2.22", features = ["full"] }
+bytes = "=0.5.6"
+async-channel = "=1.1.1"
