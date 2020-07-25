@@ -40,6 +40,7 @@ async fn server() -> Result<(), io::Error> {
     network.connack(ConnAck::new(ConnectReturnCode::Accepted, false)).await?;
     loop {
         let packets = network.readb().await?;
+        dbg!();
         for packet in packets {
             match packet {
                 Incoming::Publish(publish) => {
