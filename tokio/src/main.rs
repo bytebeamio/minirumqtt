@@ -19,7 +19,7 @@ use std::io::Write;
 /// Reach new heights.
 struct Config {
     /// size of payload
-    #[argh(option, short = 'p', default = "16")]
+    #[argh(option, short = 'p', default = "100")]
     payload_size: usize,
     /// number of messages
     #[argh(option, short = 'n', default = "1_000_000")]
@@ -67,29 +67,33 @@ async fn client(config: Config) -> Result<(), io::Error> {
     let mut network =  Network::new(socket);
     network.connect(Connect::new("minirumqtt")).await?;
     network.read_connack().await?;
-    let mut rx = stream::iter(packets(config.payload_size, config.count));
-    // let (tx, mut rx) = async_channel::bounded(100);
-    // let config2 = config.clone();
-    // thread::spawn(move || {
-    //     packetstream(config2.payload_size, config2.count, tx) ;
-    // });
+    // let mut rx = stream::iter(packets(config.payload_size, config.count));
+    let (tx, mut rx) = async_channel::bounded(10);
+    let config2 = config.clone();
+    thread::spawn(move || {
+        packetstream(config2.payload_size, config2.count, tx) ;
+    });
 
     let mut acked = 0;
     let mut sent = 0;
     let start = Instant::now();
+    let mut blocked_count = 0;
     'main: loop {
+        if sent - acked >= config.flow_control_size {
+            blocked_count += 1;
+        }
+
         select! {
             // sent - acked guard prevents bounded queue deadlock ( assuming 100 packets doesn't
             // cause framed.send() to block )
             Some(packet) = rx.next(), if sent - acked < config.flow_control_size => {
-                network.fill2(packet).unwrap();
+                network.fill(packet).unwrap();
                 network.flush().await.unwrap();
                 sent += 1;
             }
-            o = network.readb() => {
-                let packets = o.unwrap();
-                for packet in packets {
-                    match packet {
+            o = network.read() => {
+                let packet = o.unwrap();
+                    match packet.into() {
                         Incoming::Publish(_publish) => (),
                         Incoming::PubAck(_ack) => {
                             acked += 1;
@@ -99,7 +103,6 @@ async fn client(config: Config) -> Result<(), io::Error> {
                         },
                         _ => todo!()
                     }
-                }
             }
         }
     }
@@ -107,6 +110,7 @@ async fn client(config: Config) -> Result<(), io::Error> {
     let elapsed = start.elapsed();
     let throughput = (acked as usize * 1000) / elapsed.as_millis() as usize;
     println!("Id = tokio, Total = {}, Payload size (bytes) = {}, Flow control window len = {}, Throughput (messages/sec) = {}", acked, config.payload_size, config.flow_control_size, throughput);
+    dbg!(blocked_count);
     Ok(())
 }
 
