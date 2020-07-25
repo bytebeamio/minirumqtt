@@ -239,6 +239,10 @@ impl Network {
         Ok(())
     }
 
+    pub fn fill3(&mut self, request: BytesMut) -> Result<(), io::Error> {
+        self.write.extend_from_slice(&request[..]);
+        Ok(())
+    }
 
     /// Write packet to network
     pub async fn write(&mut self, request: Request) -> Result<Outgoing, io::Error> {

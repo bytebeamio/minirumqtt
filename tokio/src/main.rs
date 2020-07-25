@@ -14,6 +14,7 @@ use std::fs::File;
 use pprof::ProfilerGuard;
 use prost::Message;
 use std::io::Write;
+use bytes::BytesMut;
 
 #[derive(FromArgs, Clone)]
 /// Reach new heights.
@@ -40,7 +41,7 @@ async fn server() -> Result<(), io::Error> {
     network.connack(ConnAck::new(ConnectReturnCode::Accepted, false)).await?;
     loop {
         let packets = network.readb().await?;
-        // dbg!();
+        // dbg!(packets.len());
         for packet in packets {
             match packet {
                 Incoming::Publish(publish) => {
@@ -88,9 +89,19 @@ async fn client(config: Config) -> Result<(), io::Error> {
             // sent - acked guard prevents bounded queue deadlock ( assuming 100 packets doesn't
             // cause framed.send() to block )
             Some(packet) = rx.next(), if sent - acked < config.flow_control_size => {
-                network.fill(packet).unwrap();
-                network.flush().await.unwrap();
+                network.fill3(packet).unwrap();
                 sent += 1;
+                for _i in 0..10 {
+                    match rx.try_recv() {
+                        Ok(packet) => {
+                            network.fill3(packet).unwrap();
+                            sent += 1;
+                        }
+                        Err(_) => break
+                    }
+                }
+
+                network.flush().await.unwrap();
             }
             o = network.read() => {
                 let packet = o.unwrap();
@@ -118,7 +129,7 @@ async fn client(config: Config) -> Result<(), io::Error> {
 #[tokio::main(core_threads = 2)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config: Config = argh::from_env();
-    // let guard = pprof::ProfilerGuard::new(100).unwrap();
+    let guard = pprof::ProfilerGuard::new(100).unwrap();
     match config.mode {
         1 => {
             server().await?;
@@ -133,7 +144,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         mode => panic!("Invalid mode = {}", mode)
     }
 
-    // profile("/home/tekjar/Downloads/profile.pb", guard);
+    profile("/home/tekjar/Downloads/tokio.pb", guard);
     Ok(())
 }
 
@@ -151,13 +162,15 @@ pub fn packets(size: usize, count: usize) -> Vec<Request> {
     out
 }
 
-pub fn packetstream(size: usize, count: usize, tx: async_channel::Sender<Request>) {
+pub fn packetstream(size: usize, count: usize, tx: async_channel::Sender<BytesMut>) {
     for i in 0..count {
         let pkid = (i % 65000) as u16 + 1;
         let payload = vec![i as u8; size];
+        let mut out = BytesMut::with_capacity(5 + 11 + payload.len());
         let mut publish = Publish::new("hello/world", QoS::AtLeastOnce, payload);
         publish.set_pkid(pkid);
-        blocking::block_on(tx.send(Request::Publish(publish))).unwrap();
+        publish.write(&mut out).unwrap();
+        blocking::block_on(tx.send(out)).unwrap();
     }
 }
 
