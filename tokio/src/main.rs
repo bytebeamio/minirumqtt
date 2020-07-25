@@ -10,8 +10,12 @@ use tokio::stream::StreamExt;
 use tokio::net::{TcpStream, TcpListener};
 use crate::network::{Network, Request, Incoming};
 use mqtt4bytes::{Publish, QoS, PubAck, Connect, ConnAck, ConnectReturnCode};
+use std::fs::File;
+use pprof::ProfilerGuard;
+use prost::Message;
+use std::io::Write;
 
-#[derive(FromArgs)]
+#[derive(FromArgs, Clone)]
 /// Reach new heights.
 struct Config {
     /// size of payload
@@ -39,8 +43,10 @@ async fn server() -> Result<(), io::Error> {
         for packet in packets {
             match packet {
                 Incoming::Publish(publish) => {
-                    let request = Request::PubAck(PubAck::new(publish.pkid));
-                    network.fill2(request)?;
+                    if publish.pkid > 0 {
+                        let request = Request::PubAck(PubAck::new(publish.pkid));
+                        network.fill2(request)?;
+                    }
                 }
                 Incoming::PingReq => {
                     let request = Request::PingResp;
@@ -61,7 +67,12 @@ async fn client(config: Config) -> Result<(), io::Error> {
     let mut network =  Network::new(socket);
     network.connect(Connect::new("minirumqtt")).await?;
     network.read_connack().await?;
-    let mut stream = stream::iter(packets(config.payload_size, config.count));
+    let mut rx = stream::iter(packets(config.payload_size, config.count));
+    // let (tx, mut rx) = async_channel::bounded(100);
+    // let config2 = config.clone();
+    // thread::spawn(move || {
+    //     packetstream(config2.payload_size, config2.count, tx) ;
+    // });
 
     let mut acked = 0;
     let mut sent = 0;
@@ -70,7 +81,7 @@ async fn client(config: Config) -> Result<(), io::Error> {
         select! {
             // sent - acked guard prevents bounded queue deadlock ( assuming 100 packets doesn't
             // cause framed.send() to block )
-            Some(packet) = stream.next(), if sent - acked < config.flow_control_size => {
+            Some(packet) = rx.next(), if sent - acked < config.flow_control_size => {
                 network.fill2(packet).unwrap();
                 network.flush().await.unwrap();
                 sent += 1;
@@ -102,6 +113,7 @@ async fn client(config: Config) -> Result<(), io::Error> {
 #[tokio::main(core_threads = 2)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config: Config = argh::from_env();
+    let guard = pprof::ProfilerGuard::new(100).unwrap();
     match config.mode {
         1 => {
             server().await?;
@@ -110,13 +122,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             client(config).await?;
         }
         3 => {
-            // thread::spawn(move || client(config));
-            task::spawn(client(config));
-            server().await?;
+            task::spawn(server());
+            client(config).await?;
         }
         mode => panic!("Invalid mode = {}", mode)
     }
 
+    profile("/home/tekjar/Downloads/profile.pb", guard);
     Ok(())
 }
 
@@ -126,10 +138,31 @@ pub fn packets(size: usize, count: usize) -> Vec<Request> {
     for i in 0..count {
         let pkid = (i % 65000) as u16 + 1;
         let payload = vec![i as u8; size];
-        let mut publish = Publish::new("hello/mqtt/topic/bytes", QoS::AtLeastOnce, payload);
+        let mut publish = Publish::new("hello/world", QoS::AtLeastOnce, payload);
         publish.set_pkid(pkid);
         out.push(Request::Publish(publish))
     }
 
     out
+}
+
+pub fn packetstream(size: usize, count: usize, tx: async_channel::Sender<Request>) {
+    for i in 0..count {
+        let pkid = (i % 65000) as u16 + 1;
+        let payload = vec![i as u8; size];
+        let mut publish = Publish::new("hello/world", QoS::AtLeastOnce, payload);
+        publish.set_pkid(pkid);
+        blocking::block_on(tx.send(Request::Publish(publish))).unwrap();
+    }
+}
+
+fn profile(name: &str, guard: ProfilerGuard) {
+    if let Ok(report) = guard.report().build() {
+        let mut file = File::create(name).unwrap();
+        let profile = report.pprof().unwrap();
+
+        let mut content = Vec::new();
+        profile.encode(&mut content).unwrap();
+        file.write_all(&content).unwrap();
+    };
 }

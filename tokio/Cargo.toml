@@ -12,3 +12,6 @@ mqtt4bytes = "0.1.4"
 tokio = { version = "=0.2.22", features = ["full"] }
 bytes = "=0.5.6"
 async-channel = "=1.1.1"
+blocking = "0.4.6"
+prost = "0.6"
+pprof = { version = "0.3", features = ["flamegraph", "protobuf"] }
