@@ -4,16 +4,15 @@ use argh::FromArgs;
 use std::time::{Instant, Duration};
 use std::{io, thread};
 use tokio::select;
-use tokio::task;
-use tokio::stream;
-use tokio::stream::StreamExt;
-use tokio::net::{TcpStream, TcpListener};
+use smol::{self, Async, Task};
 use crate::network::{Network, Request, Incoming};
 use mqtt4bytes::{Publish, QoS, PubAck, Connect, ConnAck, ConnectReturnCode};
+use futures_util::stream::StreamExt;
 use std::fs::File;
 use pprof::ProfilerGuard;
 use prost::Message;
 use std::io::Write;
+use std::net::{TcpStream, TcpListener, SocketAddrV4, Ipv4Addr};
 
 #[derive(FromArgs, Clone)]
 /// Reach new heights.
@@ -28,21 +27,22 @@ struct Config {
     #[argh(option, short = 'f', default = "100")]
     flow_control_size: usize,
     /// mode 1 = only server, mode 2 = only client, mode 3 = both
-    #[argh(option, short = 'm', default = "1")]
+    #[argh(option, short = 'm', default = "3")]
     mode: usize,
 }
 
 async fn server() -> Result<(), io::Error> {
-    let mut listener = TcpListener::bind("127.0.0.1:1883").await?;
+    let addr = SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 1883);
+    let listener = Async::<TcpListener>::bind(addr).unwrap();
     let (stream, _) = listener.accept().await?;
     let mut network = Network::new(stream);
     network.read_connect().await?;
     network.connack(ConnAck::new(ConnectReturnCode::Accepted, false)).await?;
     loop {
-        let packets = network.readb().await?;
+        let packet = network.readb().await?;
         // dbg!();
-        for packet in packets {
-            match packet {
+        for packet in packet {
+            match packet.into() {
                 Incoming::Publish(publish) => {
                     if publish.pkid > 0 {
                         let request = Request::PubAck(PubAck::new(publish.pkid));
@@ -63,8 +63,10 @@ async fn server() -> Result<(), io::Error> {
 }
 
 async fn client(config: Config) -> Result<(), io::Error> {
-    tokio::time::delay_for(Duration::from_millis(1)).await;
-    let socket = TcpStream::connect("127.0.0.1:1883").await.unwrap();
+    smol::Timer::new(Duration::from_secs(1)).await;
+    let addr = SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 1883);
+    let socket = Async::<TcpStream>::connect(addr).await?;
+
     let mut network =  Network::new(socket);
     network.connect(Connect::new("minirumqtt")).await?;
     network.read_connack().await?;
@@ -94,6 +96,7 @@ async fn client(config: Config) -> Result<(), io::Error> {
             }
             o = network.read() => {
                 let packet = o.unwrap();
+                // for packet in packets {
                     match packet.into() {
                         Incoming::Publish(_publish) => (),
                         Incoming::PubAck(_ack) => {
@@ -104,36 +107,39 @@ async fn client(config: Config) -> Result<(), io::Error> {
                         },
                         _ => todo!()
                     }
+                // }
             }
         }
     }
 
     let elapsed = start.elapsed();
     let throughput = (acked as usize * 1000) / elapsed.as_millis() as usize;
-    println!("Id = tokio, Total = {}, Payload size (bytes) = {}, Flow control window len = {}, Throughput (messages/sec) = {}", acked, config.payload_size, config.flow_control_size, throughput);
+    println!("Id =smol, Total = {}, Payload size (bytes) = {}, Flow control window len = {}, Throughput (messages/sec) = {}", acked, config.payload_size, config.flow_control_size, throughput);
     dbg!(blocked_count);
     Ok(())
 }
 
-#[tokio::main(core_threads = 2)]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config: Config = argh::from_env();
-    // let guard = pprof::ProfilerGuard::new(100).unwrap();
-    match config.mode {
-        1 => {
-            server().await?;
+    let guard = pprof::ProfilerGuard::new(100).unwrap();
+    smol::run(async {
+        match config.mode {
+            1 => {
+                server().await.unwrap();
+            }
+            2 => {
+                client(config).await.unwrap();
+            }
+            3 => {
+                Task::spawn(server()).detach();
+                client(config).await.unwrap();
+            }
+            mode => panic!("Invalid mode = {}", mode)
         }
-        2 => {
-            client(config).await?;
-        }
-        3 => {
-            task::spawn(server());
-            client(config).await?;
-        }
-        mode => panic!("Invalid mode = {}", mode)
-    }
+    });
 
-    // profile("/home/tekjar/Downloads/profile.pb", guard);
+
+    profile("/home/tekjar/Downloads/smol.pb", guard);
     Ok(())
 }
 

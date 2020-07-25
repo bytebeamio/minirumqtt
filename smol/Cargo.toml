@@ -1,0 +1,19 @@
+[package]
+name = "smol"
+version = "0.1.0"
+authors = ["tekjar <raviteja@bytebeam.io>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+argh = "0.1"
+mqtt4bytes = "0.1.4"
+tokio = { version = "=0.2.22", features = ["macros"] }
+smol = "0.3"
+futures-util = { version = "0.3", features = ["io"]}
+bytes = "=0.5.6"
+async-channel = "=1.1.1"
+blocking = "0.4.6"
+prost = "0.6"
+pprof = { version = "0.3", features = ["flamegraph", "protobuf"] }
