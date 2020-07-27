@@ -35,7 +35,7 @@ impl Network {
             read: BytesMut::with_capacity(10 * 1024),
             writeb: BytesMut::with_capacity(10 * 1024),
             writev: WriteV::new(),
-            max_packet_size: 1 * 1024,
+            max_packet_size: 10 * 1024,
             max_readb_count:10
         }
     }
@@ -48,7 +48,7 @@ impl Network {
             read: BytesMut::with_capacity(read),
             writeb: BytesMut::with_capacity(write),
             writev: WriteV::new(),
-            max_packet_size: 1 * 1024,
+            max_packet_size: 10 * 1024,
             max_readb_count:10
         }
     }
@@ -259,7 +259,7 @@ impl Network {
         let mut remaining = self.writev.remaining();
         while remaining != 0 {
             let n = self.socket.write_buf(&mut self.writev).await?;
-            // dbg!(n);
+            dbg!(n);
             remaining -= n;
         }
 
@@ -311,6 +311,10 @@ impl WriteV {
 
         self.writev.push_back(payload)
     }
+
+    pub fn len(&self) -> usize {
+        self.writev.len()
+    }
 }
 
 impl Buf for WriteV {
@@ -325,6 +329,7 @@ impl Buf for WriteV {
     }
 
     fn bytes_vectored<'a>(&'a self, dst: &mut [IoSlice<'a>]) -> usize {
+        dbg!();
         let zipped = dst.iter_mut().zip(self.writev.iter());
         let len = zipped.len();
         for (io_slice, chunk) in zipped {

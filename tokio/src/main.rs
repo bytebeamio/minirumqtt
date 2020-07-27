@@ -89,19 +89,19 @@ async fn client(config: Config) -> Result<(), io::Error> {
             // sent - acked guard prevents bounded queue deadlock ( assuming 100 packets doesn't
             // cause framed.send() to block )
             Some(packet) = rx.next(), if sent - acked < config.flow_control_size => {
-                network.fill3(packet).unwrap();
+                network.fill4(packet).unwrap();
                 sent += 1;
                 for _i in 0..10 {
                     match rx.try_recv() {
                         Ok(packet) => {
-                            network.fill3(packet).unwrap();
+                            network.fill4(packet).unwrap();
                             sent += 1;
                         }
                         Err(_) => break
                     }
                 }
 
-                network.flush().await.unwrap();
+                network.flushv().await.unwrap();
             }
             o = network.read() => {
                 let packet = o.unwrap();
