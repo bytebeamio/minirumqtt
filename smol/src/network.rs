@@ -31,7 +31,7 @@ impl Network {
             read: BytesMut::with_capacity(10 * 1024),
             write: BytesMut::with_capacity(10 * 1024),
             max_packet_size: 1 * 1024,
-            max_readb_count:10
+            max_readb_count:20
         }
     }
 
@@ -57,8 +57,8 @@ impl Network {
 
     // TODO make this equivalent to `mqtt_read` to frame `Incoming` directly
     pub async fn read(&mut self) -> Result<Packet, io::Error> {
+        let mut buf = [0u8; 10 * 1024];
         loop {
-            let mut buf = [0u8; 8 * 1024];
             match mqtt_read(&mut self.read, self.max_packet_size) {
                 Ok(packet) => return Ok(packet),
                 Err(Error::InsufficientBytes(required)) => self.pending = required,
@@ -239,6 +239,12 @@ impl Network {
             return Err(io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
         };
 
+        Ok(())
+    }
+
+
+    pub fn fill3(&mut self, request: BytesMut) -> Result<(), io::Error> {
+        self.write.extend_from_slice(&request[..]);
         Ok(())
     }
 

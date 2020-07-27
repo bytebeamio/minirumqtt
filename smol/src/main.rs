@@ -13,6 +13,7 @@ use pprof::ProfilerGuard;
 use prost::Message;
 use std::io::Write;
 use std::net::{TcpStream, TcpListener, SocketAddrV4, Ipv4Addr};
+use bytes::BytesMut;
 
 #[derive(FromArgs, Clone)]
 /// Reach new heights.
@@ -90,9 +91,20 @@ async fn client(config: Config) -> Result<(), io::Error> {
             // sent - acked guard prevents bounded queue deadlock ( assuming 100 packets doesn't
             // cause framed.send() to block )
             Some(packet) = rx.next(), if sent - acked < config.flow_control_size => {
-                network.fill(packet).unwrap();
-                network.flush().await.unwrap();
+                network.fill3(packet).unwrap();
                 sent += 1;
+
+                for _i in 0..10 {
+                    match rx.try_recv() {
+                        Ok(packet) => {
+                            network.fill3(packet).unwrap();
+                            sent += 1;
+                        }
+                        Err(_) => break
+                    }
+                }
+
+                network.flush().await.unwrap();
             }
             o = network.read() => {
                 let packet = o.unwrap();
@@ -157,13 +169,15 @@ pub fn packets(size: usize, count: usize) -> Vec<Request> {
     out
 }
 
-pub fn packetstream(size: usize, count: usize, tx: async_channel::Sender<Request>) {
+pub fn packetstream(size: usize, count: usize, tx: async_channel::Sender<BytesMut>) {
     for i in 0..count {
         let pkid = (i % 65000) as u16 + 1;
         let payload = vec![i as u8; size];
+        let mut out = BytesMut::with_capacity(5 + 11 + payload.len());
         let mut publish = Publish::new("hello/world", QoS::AtLeastOnce, payload);
         publish.set_pkid(pkid);
-        blocking::block_on(tx.send(Request::Publish(publish))).unwrap();
+        publish.write(&mut out).unwrap();
+        blocking::block_on(tx.send(out)).unwrap();
     }
 }
 
