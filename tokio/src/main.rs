@@ -23,7 +23,7 @@ struct Config {
     #[argh(option, short = 'p', default = "100")]
     payload_size: usize,
     /// number of messages
-    #[argh(option, short = 'n', default = "1_000_000")]
+    #[argh(option, short = 'n', default = "1000000")]
     count: usize,
     /// number of messages
     #[argh(option, short = 'f', default = "100")]

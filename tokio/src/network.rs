@@ -1,8 +1,10 @@
 use tokio::io::{AsyncRead, AsyncWrite, AsyncReadExt, AsyncWriteExt};
-use bytes::BytesMut;
+use bytes::{BytesMut, Bytes, Buf};
 use mqtt4bytes::*;
 
 use std::io;
+use std::collections::VecDeque;
+use std::io::IoSlice;
 
 /// Network transforms packets <-> frames efficiently. It takes
 /// advantage of pre-allocation, buffering and vectorization when
@@ -14,8 +16,10 @@ pub struct Network {
     pending: usize,
     /// Buffered reads
     read: BytesMut,
-    /// Buffered writes
-    write: BytesMut,
+    /// Buffer for bulk writes
+    writeb: BytesMut,
+    /// Buffer for vectored writes
+    writev: WriteV,
     /// Maximum packet size
     max_packet_size: usize,
     /// Maximum readv count
@@ -29,7 +33,8 @@ impl Network {
             socket,
             pending: 0,
             read: BytesMut::with_capacity(10 * 1024),
-            write: BytesMut::with_capacity(10 * 1024),
+            writeb: BytesMut::with_capacity(10 * 1024),
+            writev: WriteV::new(),
             max_packet_size: 1 * 1024,
             max_readb_count:10
         }
@@ -41,7 +46,8 @@ impl Network {
             socket,
             pending: 0,
             read: BytesMut::with_capacity(read),
-            write: BytesMut::with_capacity(write),
+            writeb: BytesMut::with_capacity(write),
+            writev: WriteV::new(),
             max_packet_size: 1 * 1024,
             max_readb_count:10
         }
@@ -131,48 +137,48 @@ impl Network {
     #[inline]
     fn write_fill(&mut self, request: Request) -> Result<usize, Error> {
         let size = match request {
-            Request::Publish(packet) => packet.write(&mut self.write)?,
+            Request::Publish(packet) => packet.write(&mut self.writeb)?,
             Request::Publishes(packets) => {
                 let mut size = 0;
                 for packet in packets {
-                    size += packet.write(&mut self.write)?;
+                    size += packet.write(&mut self.writeb)?;
                 }
                 size
             }
-            Request::PubRel(packet) => packet.write(&mut self.write)?,
+            Request::PubRel(packet) => packet.write(&mut self.writeb)?,
             Request::PingReq => {
                 let packet = PingReq;
-                packet.write(&mut self.write)?
+                packet.write(&mut self.writeb)?
             },
             Request::PingResp => {
                 let packet = PingResp;
-                packet.write(&mut self.write)?
+                packet.write(&mut self.writeb)?
             }
-            Request::Subscribe(packet) => packet.write(&mut self.write)?,
-            Request::SubAck(packet) => packet.write(&mut self.write)?,
-            Request::Unsubscribe(packet) => packet.write(&mut self.write)?,
-            Request::UnsubAck(packet) => packet.write(&mut self.write)?,
+            Request::Subscribe(packet) => packet.write(&mut self.writeb)?,
+            Request::SubAck(packet) => packet.write(&mut self.writeb)?,
+            Request::Unsubscribe(packet) => packet.write(&mut self.writeb)?,
+            Request::UnsubAck(packet) => packet.write(&mut self.writeb)?,
             Request::Disconnect => {
                 let packet = Disconnect;
-                packet.write(&mut self.write)?
+                packet.write(&mut self.writeb)?
             },
-            Request::PubAck(packet) => packet.write(&mut self.write)?,
+            Request::PubAck(packet) => packet.write(&mut self.writeb)?,
             Request::PubAcks(packets) => {
                 let mut size = 0;
                 for packet in packets {
-                    size += packet.write(&mut self.write)?;
+                    size += packet.write(&mut self.writeb)?;
                 }
                 size
             }
-            Request::PubRec(packet) => packet.write(&mut self.write)?,
-            Request::PubComp(packet) => packet.write(&mut self.write)?,
+            Request::PubRec(packet) => packet.write(&mut self.writeb)?,
+            Request::PubComp(packet) => packet.write(&mut self.writeb)?,
         };
 
         Ok(size)
     }
 
     pub async fn connect(&mut self, connect: Connect) -> Result<usize, io::Error> {
-        let len = match connect.write(&mut self.write) {
+        let len = match connect.write(&mut self.writeb) {
             Ok(size) => size,
             Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
         };
@@ -182,7 +188,7 @@ impl Network {
     }
 
     pub async fn connack(&mut self, connack: ConnAck) -> Result<usize, io::Error> {
-        let len = match connack.write(&mut self.write) {
+        let len = match connack.write(&mut self.writeb) {
             Ok(size) => size,
             Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
         };
@@ -240,7 +246,23 @@ impl Network {
     }
 
     pub fn fill3(&mut self, request: BytesMut) -> Result<(), io::Error> {
-        self.write.extend_from_slice(&request[..]);
+        self.writeb.extend_from_slice(&request[..]);
+        Ok(())
+    }
+
+    pub fn fill4(&mut self, request: BytesMut) -> Result<(), io::Error> {
+        self.writev.push(request.freeze());
+        Ok(())
+    }
+
+    pub async fn flushv(&mut self) -> io::Result<()> {
+        let mut remaining = self.writev.remaining();
+        while remaining != 0 {
+            let n = self.socket.write_buf(&mut self.writev).await?;
+            // dbg!(n);
+            remaining -= n;
+        }
+
         Ok(())
     }
 
@@ -252,12 +274,12 @@ impl Network {
     }
 
     pub async fn flush(&mut self) -> Result<(), io::Error> {
-        if self.write.len() == 0 {
+        if self.writeb.len() == 0 {
             return Ok(())
         }
 
-        self.socket.write_all(&self.write[..]).await?;
-        self.write.clear();
+        self.socket.write_all(&self.writeb[..]).await?;
+        self.writeb.clear();
         Ok(())
     }
 
@@ -268,6 +290,66 @@ impl Network {
 
         self.flush().await?;
         Ok(())
+    }
+}
+
+pub struct WriteV {
+    writev: VecDeque<Bytes>
+}
+
+impl WriteV {
+    pub fn new() -> WriteV {
+        WriteV {
+            writev: VecDeque::with_capacity(100)
+        }
+    }
+
+    pub fn push(&mut self, payload: Bytes) {
+        if payload.is_empty() {
+            return
+        }
+
+        self.writev.push_back(payload)
+    }
+}
+
+impl Buf for WriteV {
+    fn remaining(&self) -> usize {
+        self.writev
+            .iter()
+            .fold(0, |sum, chunk| sum + chunk.len())
+    }
+
+    fn bytes(&self) -> &[u8] {
+        self.writev.front().unwrap()
+    }
+
+    fn bytes_vectored<'a>(&'a self, dst: &mut [IoSlice<'a>]) -> usize {
+        let zipped = dst.iter_mut().zip(self.writev.iter());
+        let len = zipped.len();
+        for (io_slice, chunk) in zipped {
+            *io_slice = IoSlice::new(chunk);
+        }
+
+        len
+    }
+
+    fn advance(&mut self, mut cnt: usize) {
+        loop {
+            match self.writev.front_mut() {
+                Some(p) => {
+                    let len = p.len();
+                    if cnt < len {
+                        p.advance(cnt);
+                        return
+                    } else {
+                        cnt -= len;
+                        self.writev.pop_front();
+                    }
+                }
+                None => return
+            }
+        }
     }
 }
 
