@@ -30,6 +30,9 @@ struct Config {
     /// number of messages
     #[argh(option, short = 'f', default = "100")]
     flow_control_size: u16,
+    /// qos
+    #[argh(option, short = 'q', default = "1")]
+    qos: u8,
     /// mode 1 = only server, mode 2 = only client, mode 3 = both
     #[argh(option, short = 'm', default = "1")]
     mode: usize,
@@ -58,10 +61,15 @@ async fn client(config: Config) {
     let socket = TcpStream::connect("127.0.0.1:1883").await.unwrap();
     let mut network =  Network::new(socket, 100 * 1024);
     let mut state = MqttState::new(config.flow_control_size);
-    let mut requests = Requests::new(config.count, config.payload_size);
+    let mut requests = Requests::new(config.count, config.payload_size, config.qos);
     let mut acked = 0;
-    let start = Instant::now();
+    let mut expected = config.count;
 
+    if config.qos == 0 {
+        expected = 1;
+    }
+
+    let start = Instant::now();
     network.connect(Connect::new("minirumqtt")).await.unwrap();
     match network.read().await.unwrap() {
         Incoming::ConnAck(_) => (),
@@ -77,7 +85,7 @@ async fn client(config: Config) {
             match packet {
                 Incoming::PubAck(_ack) => {
                     acked += 1;
-                    if acked >= config.count {
+                    if acked >= expected {
                         break 'main;
                     }
                 },
@@ -101,8 +109,13 @@ async fn client(config: Config) {
         }
     }
 
+    // Assume all the messages have reached broker
+    if config.qos == 0 {
+        acked = config.count;
+    }
     let elapsed = start.elapsed();
     let throughput = (acked as usize * 1000) / elapsed.as_millis() as usize;
+
     println!("Id = tokio, Total = {}, Payload size (bytes) = {}, Flow control window len = {}, Throughput (messages/sec) = {}", acked, config.payload_size, config.flow_control_size, throughput);
 }
 
@@ -132,14 +145,16 @@ async fn main() {
 struct Requests {
     current_count: usize,
     max_count: usize,
+    qos: u8,
     size: usize
 }
 
 impl Requests {
-    pub fn new(max_count: usize, size: usize) -> Requests {
+    pub fn new(max_count: usize, size: usize, qos: u8) -> Requests {
         Requests {
             current_count: 0,
             max_count,
+            qos,
             size
         }
     }
@@ -147,9 +162,17 @@ impl Requests {
     pub async fn next(&mut self) -> Option<Packet> {
         if self.current_count < self.max_count {
             let payload = vec![1 as u8; self.size];
+            let publish = Publish::new("hello/world", qos(self.qos).unwrap(), payload);
+            let publish = Packet::Publish(publish);
+            self.current_count += 1;
+            return Some(publish)
+        }
+
+        // Send one more packet as sync marker (assumes broker is ordered)
+        if self.current_count == self.max_count && self.qos == 0 {
+            let payload = vec![1 as u8; self.size];
             let publish = Publish::new("hello/world", QoS::AtLeastOnce, payload);
             let publish = Packet::Publish(publish);
-
             self.current_count += 1;
             return Some(publish)
         }
