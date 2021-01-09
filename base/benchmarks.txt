@@ -1,2 +1,4 @@
-Id = tokio, Total = 1000000, Payload size (bytes) = 100, Flow control window len = 100, Throughput (messages/sec) = 566893
-Id = tokio, Total = 1000000, Payload size (bytes) = 100, Flow control window len = 100, Throughput (messages/sec) = 1023541
+Id = one-local-q1, Total = 1000000, Payload size (bytes) = 100, Flow control window len = 100, Throughput (messages/sec) = 372995
+Id = one-local-q0, Total = 1000000, Payload size (bytes) = 100, Flow control window len = 100, Throughput (messages/sec) = 963391
+Id = one-remote-q1, Total = 1000000, Payload size (bytes) = 100, Flow control window len = 100, Throughput (messages/sec) = 579710
+Id = one-remote-q0, Total = 1000000, Payload size (bytes) = 100, Flow control window len = 100, Throughput (messages/sec) = 1037344

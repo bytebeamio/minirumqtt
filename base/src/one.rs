@@ -21,6 +21,9 @@ use state::*;
 #[derive(FromArgs, Clone)]
 /// Reach new heights.
 struct Config {
+    /// id of this setup
+    #[argh(option, short = 'i', default = "String::from(\"hello\")")]
+    id: String,
     /// size of payload
     #[argh(option, short = 'p', default = "100")]
     payload_size: usize,
@@ -39,7 +42,7 @@ struct Config {
 }
 
 async fn server() {
-    let listener = TcpListener::bind("127.0.0.1:1883").await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:1884").await.unwrap();
     let (stream, _) = listener.accept().await.unwrap();
     let mut network = Network::new(stream, 100 * 1024);
     let mut state = MqttState::new(100);
@@ -61,7 +64,11 @@ async fn server() {
 
 async fn client(config: Config) {
     tokio::time::sleep(Duration::from_millis(1)).await;
-    let socket = TcpStream::connect("127.0.0.1:1883").await.unwrap();
+    let socket = match config.mode {
+        3 => TcpStream::connect("127.0.0.1:1884").await.unwrap(),
+        _ => TcpStream::connect("127.0.0.1:1883").await.unwrap(),
+    };
+
     let mut network = Network::new(socket, 100 * 1024);
     let mut state = MqttState::new(config.flow_control_size);
     let mut requests = Requests::new(config.count, config.payload_size, config.qos);
@@ -73,7 +80,7 @@ async fn client(config: Config) {
     }
 
     let start = Instant::now();
-    network.connect(Connect::new("minirumqtt")).await.unwrap();
+    network.connect(Connect::new(&config.id)).await.unwrap();
     match network.read().await.unwrap() {
         Incoming::ConnAck(_) => (),
         v => unimplemented!("{:?}", v),
@@ -116,13 +123,14 @@ async fn client(config: Config) {
     if config.qos == 0 {
         acked = config.count;
     }
+
     let elapsed = start.elapsed();
     let throughput = (acked as usize * 1000) / elapsed.as_millis() as usize;
 
-    println!("Id = tokio, Total = {}, Payload size (bytes) = {}, Flow control window len = {}, Throughput (messages/sec) = {}", acked, config.payload_size, config.flow_control_size, throughput);
+    println!("Id = {}, Total = {}, Payload size (bytes) = {}, Flow control window len = {}, Throughput (messages/sec) = {}", config.id, acked, config.payload_size, config.flow_control_size, throughput);
 }
 
-#[tokio::main(worker_threads = 2)]
+#[tokio::main(worker_threads = 1)]
 async fn main() {
     pretty_env_logger::init();
 
@@ -172,7 +180,7 @@ impl Requests {
         }
 
         // Send one more packet as sync marker (assumes broker is ordered)
-        if self.current_count == self.max_count && self.qos == 0 {
+        if self.current_count == self.max_count  {
             let payload = vec![1 as u8; self.size];
             let publish = Publish::new("hello/world", QoS::AtLeastOnce, payload);
             let publish = Packet::Publish(publish);

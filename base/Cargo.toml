@@ -15,3 +15,7 @@ mqttbytes = { path = "../../rumqtt/mqttbytes" }
 tokio = { version = "=1", features = ["full"] }
 bytes = "=1"
 pprof = { version = "0.3", features = ["flamegraph", "protobuf"] }
+
+[[bin]]
+name = "one"
+path = "src/one.rs"
