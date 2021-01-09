@@ -11,8 +11,7 @@ argh = "0.1"
 thiserror = "1"
 log = "0.4"
 pretty_env_logger = "0.4"
-mqtt4bytes = { path = "../../rumqtt/mqtt4bytes" }
-tokio = { version = "=0.3", features = ["full"] }
-bytes = "0.6"
-prost = "0.6"
+mqttbytes = { path = "../../rumqtt/mqttbytes" }
+tokio = { version = "=1", features = ["full"] }
+bytes = "=1"
 pprof = { version = "0.3", features = ["flamegraph", "protobuf"] }

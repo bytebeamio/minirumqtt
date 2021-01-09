@@ -1,5 +1,5 @@
 use bytes::BytesMut;
-use mqtt4bytes::*;
+use mqttbytes::*;
 use std::collections::VecDeque;
 use std::{io, mem, time::Instant};
 
@@ -32,7 +32,7 @@ pub enum StateError {
     #[error("Timeout while waiting to resolve collision")]
     CollisionTimeout,
     #[error("Mqtt serialization/deserialization error")]
-    Serialization(mqtt4bytes::Error),
+    Serialization(mqttbytes::Error),
 }
 
 /// State of the mqtt connection.
@@ -328,7 +328,7 @@ impl MqttState {
 
         debug!(
             "Subscribe. Topics = {:?}, Pkid = {:?}",
-            subscription.topics, subscription.pkid
+            subscription.filters, subscription.pkid
         );
 
         subscription
